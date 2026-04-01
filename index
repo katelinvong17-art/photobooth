@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Photobooth</title>
+  <style>
+    body { font-family: Arial; text-align: center; background: #111; color: white; }
+    video, canvas { border-radius: 10px; margin-top: 10px; }
+    #startBtn { padding: 15px 30px; font-size: 20px; cursor: pointer; }
+    #countdown { font-size: 80px; margin-top: 20px; }
+    #stripPreview { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>📸 Photobooth</h1>
+  <button id="startBtn">Start</button>
+  <div id="countdown"></div>
+  <br>
+
+  <video id="video" width="400" height="300" autoplay></video>
+  <canvas id="canvas" width="400" height="900" style="display:none;"></canvas>
+
+  <div id="stripPreview"></div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const countdownEl = document.getElementById('countdown');
+    const startBtn = document.getElementById('startBtn');
+    const stripPreview = document.getElementById('stripPreview');
+
+    let photos = [];
+
+    // Access webcam
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => video.srcObject = stream)
+      .catch(err => alert('Camera access denied'));
+
+    startBtn.onclick = async () => {
+      startBtn.style.display = 'none';
+      stripPreview.innerHTML = '';
+      photos = [];
+
+      for (let i = 0; i < 3; i++) {
+        await countdown();
+        takePhoto();
+      }
+
+      createStrip();
+      showPreview();
+      await uploadToServer();
+
+      startBtn.style.display = 'inline-block';
+    };
+
+    function countdown() {
+      return new Promise(resolve => {
+        let count = 3;
+        countdownEl.textContent = count;
+
+        const interval = setInterval(() => {
+          count--;
+          if (count > 0) {
+            countdownEl.textContent = count;
+          } else {
+            countdownEl.textContent = '';
+            clearInterval(interval);
+            resolve();
+          }
+        }, 1000);
+      });
+    }
+
+    function takePhoto() {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 400;
+      tempCanvas.height = 300;
+      tempCanvas.getContext('2d').drawImage(video, 0, 0, 400, 300);
+      photos.push(tempCanvas);
+    }
+
+    function createStrip() {
+      canvas.style.display = 'block';
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      photos.forEach((photo, i) => {
+        ctx.drawImage(photo, 0, i * 300, 400, 300);
+      });
+    }
+
+    function showPreview() {
+      const img = document.createElement('img');
+      img.style.width = '200px';
+      img.style.border = '5px solid white';
+      img.src = canvas.toDataURL('image/jpeg');
+
+      stripPreview.innerHTML = '<h2>Your Photostrip</h2>';
+      stripPreview.appendChild(img);
+    }
+
+    async function uploadToServer() {
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg'));
+
+      const formData = new FormData();
+      formData.append('file', blob, 'photostrip.jpg');
+
+      await fetch('http://localhost:3000/upload', {
+        method: 'POST',
+        body: formData
+      });
+    }
+  </script>
+</body>
+</html>
+
+
+/* ================= BACKEND (Node.js) =================
+
+1. Create a new file: server.js
+
+------------------------------------------------------
+
+const express = require('express');
+const multer = require('multer');
+const fs = require('fs');
+const fetch = require('node-fetch');
+require('dotenv').config();
+
+const app = express();
+const upload = multer({ dest: 'uploads/' });
+
+app.post('/upload', upload.single('file'), async (req, res) => {
+  const filePath = req.file.path;
+
+  const fileData = fs.readFileSync(filePath);
+
+  // STEP 1: Upload bytes to Google Photos
+  const uploadToken = await fetch('https://photoslibrary.googleapis.com/v1/uploads', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.ACCESS_TOKEN}`,
+      'Content-type': 'application/octet-stream',
+      'X-Goog-Upload-File-Name': 'photostrip.jpg',
+      'X-Goog-Upload-Protocol': 'raw'
+    },
+    body: fileData
+  }).then(res => res.text());
+
+  // STEP 2: Create media item
+  await fetch('https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      newMediaItems: [{
+        simpleMediaItem: {
+          uploadToken: uploadToken
+        }
+      }]
+    })
+  });
+
+  fs.unlinkSync(filePath);
+  res.send('Uploaded to Google Photos');
+});
+
+app.listen(3000, () => console.log('Server running on port 3000'));
+
+------------------------------------------------------
+
+2. Install dependencies:
+
+npm init -y
+npm install express multer node-fetch dotenv
+
+3. Create .env file:
+
+ACCESS_TOKEN=YOUR_GOOGLE_OAUTH_TOKEN
+
+4. IMPORTANT:
+- You must implement OAuth2 to get ACCESS_TOKEN
+- Use Google Cloud Console to enable Photos Library API
+
+====================================================== */
